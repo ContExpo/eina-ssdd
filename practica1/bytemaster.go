@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"crypto/x509"
+	"encoding/binary"
 	"encoding/gob"
 	"encoding/pem"
 	"errors"
@@ -56,25 +57,25 @@ func NewSshClient(user string, host string, port int, privateKeyPath string, pri
 
 // Opens a new SSH connection and runs the specified command
 // Returns the combined output of stdout and stderr
-func (s *SshClient) RunCommand(cmd string) (string, error) {
+func (s *SshClient) RunCommand(cmd string) ([]byte, error) {
 	// open connection
 	conn, err := ssh.Dial("tcp", s.Server, s.Config)
 	if err != nil {
-		return "", fmt.Errorf("Dial to %v failed %v", s.Server, err)
+		return nil, fmt.Errorf("Dial to %v failed %v", s.Server, err)
 	}
 	defer conn.Close()
 
 	// open session
 	session, err := conn.NewSession()
 	if err != nil {
-		return "", fmt.Errorf("Create session for %v failed %v", s.Server, err)
+		return nil, fmt.Errorf("Create session for %v failed %v", s.Server, err)
 	}
 	defer session.Close()
 
 	// run command and capture stdout/stderr
 	output, err := session.CombinedOutput(cmd)
 
-	return fmt.Sprintf("%s", output), err
+	return output, err
 }
 
 func signerFromPem(pemBytes []byte, password []byte) (ssh.Signer, error) {
@@ -153,15 +154,15 @@ func checkError(err error) {
 	}
 }
 
-func parseWorkerReply(reply string) (primes []int) {
-	for index, el := range strings.Split(reply, " ") {
-		_ = index
-		intnumber, err := strconv.Atoi(el)
-		if err == nil {
-			primes = append(primes, intnumber)
-		}
+func parseWorkerReply(reply []byte) (primes []int64) {
+	for i := 0; i < len(reply); i += 4 {
+		primes = append(primes, getInt(reply[i:i+4]))
 	}
 	return primes
+}
+
+func getInt(num []byte) uint64 {
+	return binary.BigEndian.(num)
 }
 
 func manageWorker(address string, channel *chan com.Request, encoder *gob.Encoder) {
@@ -178,7 +179,7 @@ func manageWorker(address string, channel *chan com.Request, encoder *gob.Encode
 		"/home/conte/.ssh/id_rsa",
 		"")
 	var command string
-	var w_reply string
+	var w_reply []byte
 	var reply com.Reply
 	for req := range *channel {
 		command = fmt.Sprintf("go run eina-ssdd/practica1/worker.go %d %d", req.Interval.A, req.Interval.B)
@@ -189,7 +190,7 @@ func manageWorker(address string, channel *chan com.Request, encoder *gob.Encode
 		//fmt.Println("Got response " + w_reply)
 		reply.Id = req.Id
 		reply.Primes = parseWorkerReply(w_reply)
-		fmt.Println("Sending: ", reply)
+		//fmt.Println("Sending: ", reply)
 		encoder.Encode(reply)
 	}
 }

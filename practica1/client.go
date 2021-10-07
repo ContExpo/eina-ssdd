@@ -86,8 +86,9 @@ func main() {
 	endpoint := "127.0.0.1:30000"
 	numIt := 10
 	requestTmp := runtime.GOMAXPROCS(0)
-	//requestTmp = 10
+	//requestTmp = 6
 	interval := com.TPInterval{1000, 70000}
+	//interval := com.TPInterval{1, 100}
 	tts := 3000 // time to sleep between consecutive requests
 	outFile, err := os.Create("output.txt")
 	defer outFile.Close()
