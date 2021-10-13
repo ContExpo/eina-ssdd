@@ -161,12 +161,12 @@ func manageWorker(address string, channel *chan com.Request, encoder *gob.Encode
 	split := strings.Split(address, ":")
 	port, err := strconv.Atoi(split[1])
 	checkError(err)
-	var username = "conte"
+	var username = "a847803"
 	ssh, err := NewSshClient(
 		username,
 		split[0],
 		22,
-		"/home/"+username+"/.ssh/id_rsa",
+		"/home/conte/.ssh/id_rsa",
 		"")
 	if err != nil {
 		fmt.Printf("Worker %v didn't respond, terminating proxy to it\n", address)
@@ -175,11 +175,13 @@ func manageWorker(address string, channel *chan com.Request, encoder *gob.Encode
 	}
 
 	var command string
-	command = fmt.Sprintf("./workerprac1 %d", port)
+	command = fmt.Sprintf("\"./workerprac1 %d\"", port)
+	//command = "ls"
 	fmt.Println("Executing command " + command)
 	resp, err := ssh.RunCommand(command)
 	checkError(err)
 	fmt.Println("Worker resp: " + resp)
+	return
 	time.Sleep(1000 * time.Millisecond) //Give time to client to set up
 	var endpoint = fmt.Sprintf("127.0.0.1:%d", port)
 	tcpAddr, err := net.ResolveTCPAddr("tcp", endpoint)
@@ -225,8 +227,11 @@ func main() {
 	}
 	var req com.Request
 	fmt.Println("Server on\n")
+	var i = 0
 	for {
 		err := decoder.Decode(&req)
+		fmt.Printf("Received request %d\n", i)
+		i++
 		checkError(err)
 		reqchan <- req
 	}
