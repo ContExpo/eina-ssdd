@@ -74,8 +74,9 @@ func (s *SshClient) RunCommand(cmd string) (string, error) {
 
 	// run command and capture stdout/stderr
 	output, err := session.CombinedOutput(cmd)
-
-	return fmt.Sprintf("%s", output), err
+	var resp = fmt.Sprintf("%s", output)
+	fmt.Println(resp)
+	return resp, err
 }
 
 func signerFromPem(pemBytes []byte, password []byte) (ssh.Signer, error) {
@@ -175,15 +176,14 @@ func manageWorker(address string, channel *chan com.Request, encoder *gob.Encode
 	}
 
 	var command string
-	command = fmt.Sprintf("\"./workerprac1 %d\"", port)
+	command = fmt.Sprintf("./workerprac1 %d", port)
 	//command = "ls"
 	fmt.Println("Executing command " + command)
-	resp, err := ssh.RunCommand(command)
+	go ssh.RunCommand(command)
 	checkError(err)
-	fmt.Println("Worker resp: " + resp)
-	return
-	time.Sleep(1000 * time.Millisecond) //Give time to client to set up
-	var endpoint = fmt.Sprintf("127.0.0.1:%d", port)
+	//fmt.Println("Worker resp: " + resp)
+	time.Sleep(3000 * time.Millisecond) //Give time to client to set up
+	var endpoint = address
 	tcpAddr, err := net.ResolveTCPAddr("tcp", endpoint)
 	conn, err := net.DialTCP("tcp", nil, tcpAddr)
 	fmt.Println("Dialing " + tcpAddr.String())

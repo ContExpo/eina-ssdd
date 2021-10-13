@@ -1,2 +1,1 @@
-lab102-210.cps.unizar.es:31000
-lab102-210.cps.unizar.es:31001
+lab102-210.cps.unizar.es:31006

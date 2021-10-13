@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"prac1/com"
+	"time"
 )
 
 func checkError(err error) {
@@ -37,11 +38,16 @@ func FindPrimes(interval com.TPInterval) (primes []int) {
 	return primes
 }
 
+func closeAfter(seconds int) {
+	time.Sleep(120 * time.Second)
+	os.Exit(1)
+}
+
 /*Servidor que recibe un intervalo de un cliente y le devuelve
 los primos dentro del intervalo
 */
 func main() {
-
+	go closeAfter(120)
 	if len(os.Args) != 2 {
 		return
 	}
@@ -86,6 +92,7 @@ func main() {
 		reply.Primes = FindPrimes(req.Interval)
 
 		//Enviamos el intervalo
-		encoder.Encode(reply)
+		err = encoder.Encode(reply)
+		checkError(err)
 	}
 }
