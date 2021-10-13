@@ -1,15 +1,16 @@
 package main
 
 import (
+	"encoding/gob"
 	"fmt"
+	"net"
 	"os"
 	"prac1/com"
-	"strconv"
 )
 
 func checkError(err error) {
 	if err != nil {
-		//fmt.Fprintf(os.Stderr, "Fatal error: %s", err.Error())
+		fmt.Fprintf(os.Stderr, "Fatal error: %s", err.Error())
 		os.Exit(1)
 	}
 }
@@ -36,28 +37,55 @@ func FindPrimes(interval com.TPInterval) (primes []int) {
 	return primes
 }
 
-func PrintPrimes(interval com.TPInterval) {
-	for i := interval.A; i <= interval.B; i++ {
-		if IsPrime(i) {
-			fmt.Printf("%d ", i)
-		}
-	}
-}
-
 /*Servidor que recibe un intervalo de un cliente y le devuelve
 los primos dentro del intervalo
 */
 func main() {
 
-	if len(os.Args) != 3 {
+	if len(os.Args) != 2 {
 		return
 	}
-	var first int
-	var last int
+
 	var err error
-	first, err = strconv.Atoi(os.Args[1])
+	CONN_TYPE := "tcp"
+	CONN_HOST := "0.0.0.0"
+	CONN_PORT := os.Args[1]
+
+	fmt.Println("hello")
+
+	//Abrimos puerto
+	listener, err := net.Listen(CONN_TYPE, CONN_HOST+":"+CONN_PORT)
 	checkError(err)
-	last, err = strconv.Atoi(os.Args[2])
+	fmt.Println("Waiting for client")
+
+	//Aceptamos conexion
+	conn, err := listener.Accept()
+	fmt.Println("Client found")
 	checkError(err)
-	PrintPrimes(com.TPInterval{first, last})
+	defer conn.Close()
+
+	/*Creamos un codificador para mandar respuestas serializadas
+	por gob y un decodificador para recibir peticiones y
+	deserializarlas
+	*/
+	encoder := gob.NewEncoder(conn)
+	decoder := gob.NewDecoder(conn)
+
+	var reply com.Reply
+	var req com.Request
+
+	for {
+		//Recibimos la peticion
+		//fmt.Println("Awaiting request")
+		err = decoder.Decode(&req)
+		//fmt.Println("Request received")
+		checkError(err)
+		reply.Id = req.Id
+
+		//Calculamos los primos que devolver
+		reply.Primes = FindPrimes(req.Interval)
+
+		//Enviamos el intervalo
+		encoder.Encode(reply)
+	}
 }

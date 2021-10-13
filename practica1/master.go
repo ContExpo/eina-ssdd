@@ -13,6 +13,7 @@ import (
 	"prac1/com"
 	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 )
@@ -153,50 +154,60 @@ func checkError(err error) {
 	}
 }
 
-func parseWorkerReply(reply string) (primes []int) {
-	for index, el := range strings.Split(reply, " ") {
-		_ = index
-		intnumber, err := strconv.Atoi(el)
-		if err == nil {
-			primes = append(primes, intnumber)
-		}
-	}
-	return primes
-}
-
 func manageWorker(address string, channel *chan com.Request, encoder *gob.Encoder) {
+
+	//Port is the port that the client will open a connection on, serverPort is the dedicated port to that connection from the server
 	fmt.Println("Trying to connect to worker at " + address)
 	split := strings.Split(address, ":")
 	port, err := strconv.Atoi(split[1])
-	if err != nil {
-		fmt.Printf("Worker %v didn't respond", address)
-	}
+	checkError(err)
+	var username = "conte"
 	ssh, err := NewSshClient(
-		"conte",
+		username,
 		split[0],
-		port,
-		"/home/conte/.ssh/id_rsa",
+		22,
+		"/home/"+username+"/.ssh/id_rsa",
 		"")
-	var command string
-	var w_reply string
-	var reply com.Reply
-	for req := range *channel {
-		command = fmt.Sprintf("go run eina-ssdd/practica1/worker.go %d %d", req.Interval.A, req.Interval.B)
-		//command = "ls"
-		//fmt.Println("Executing command " + command)
-		w_reply, err = ssh.RunCommand(command)
+	if err != nil {
+		fmt.Printf("Worker %v didn't respond, terminating proxy to it\n", address)
 		checkError(err)
-		//fmt.Println("Got response " + w_reply)
-		reply.Id = req.Id
-		reply.Primes = parseWorkerReply(w_reply)
-		fmt.Println("Sending: ", reply)
+		return
+	}
+
+	var command string
+	command = fmt.Sprintf("./workerprac1 %d", port)
+	fmt.Println("Executing command " + command)
+	resp, err := ssh.RunCommand(command)
+	checkError(err)
+	fmt.Println("Worker resp: " + resp)
+	time.Sleep(1000 * time.Millisecond) //Give time to client to set up
+	var endpoint = fmt.Sprintf("127.0.0.1:%d", port)
+	tcpAddr, err := net.ResolveTCPAddr("tcp", endpoint)
+	conn, err := net.DialTCP("tcp", nil, tcpAddr)
+	fmt.Println("Dialing " + tcpAddr.String())
+	checkError(err)
+
+	var workerEncoder = gob.NewEncoder(conn)
+	var workerDecoder = gob.NewDecoder(conn)
+	checkError(err)
+	//Command to run is command clientport
+	var reply com.Reply
+	var req com.Request
+	for {
+		req = <-*channel
+		checkError(err)
+		workerEncoder.Encode(req)
+		err = workerDecoder.Decode(&reply)
+		//fmt.Println("Sending: ", reply)
 		encoder.Encode(reply)
 	}
 }
 
 func main() {
 
+	fmt.Println("Waiting for connection")
 	listener, err := net.Listen("tcp", "127.0.0.1:30000")
+	//var freePort = 30001
 	checkError(err)
 	conn, err := listener.Accept()
 	defer conn.Close()
@@ -210,6 +221,7 @@ func main() {
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		go manageWorker(scanner.Text(), &reqchan, encoder)
+		//freePort = freePort + 1
 	}
 	var req com.Request
 	fmt.Println("Server on\n")
