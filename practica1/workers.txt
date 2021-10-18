@@ -1,1 +1,2 @@
-lab102-210.cps.unizar.es:31006
+localhost:31000
+localhost:31001

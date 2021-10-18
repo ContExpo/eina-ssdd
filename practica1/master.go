@@ -55,30 +55,6 @@ func NewSshClient(user string, host string, port int, privateKeyPath string, pri
 	return client, nil
 }
 
-// Opens a new SSH connection and runs the specified command
-// Returns the combined output of stdout and stderr
-func (s *SshClient) RunCommand(cmd string) (string, error) {
-	// open connection
-	conn, err := ssh.Dial("tcp", s.Server, s.Config)
-	if err != nil {
-		return "", fmt.Errorf("Dial to %v failed %v", s.Server, err)
-	}
-	defer conn.Close()
-
-	// open session
-	session, err := conn.NewSession()
-	if err != nil {
-		return "", fmt.Errorf("Create session for %v failed %v", s.Server, err)
-	}
-	defer session.Close()
-
-	// run command and capture stdout/stderr
-	output, err := session.CombinedOutput(cmd)
-	var resp = fmt.Sprintf("%s", output)
-	fmt.Println(resp)
-	return resp, err
-}
-
 func signerFromPem(pemBytes []byte, password []byte) (ssh.Signer, error) {
 
 	// read pem block
@@ -155,6 +131,31 @@ func checkError(err error) {
 	}
 }
 
+// Opens a new SSH connection and runs the specified command
+// Returns the combined output of stdout and stderr
+func (s *SshClient) RunCommand(cmd string) (string, error) {
+	// open connection
+	conn, err := ssh.Dial("tcp", s.Server, s.Config)
+	if err != nil {
+		return "", fmt.Errorf("Dial to %v failed %v", s.Server, err)
+	}
+	defer conn.Close()
+
+	// open session
+	session, err := conn.NewSession()
+	if err != nil {
+		return "", fmt.Errorf("Create session for %v failed %v", s.Server, err)
+	}
+	defer session.Close()
+
+	// run command and capture stdout/stderr
+	fmt.Println("Executing command " + cmd)
+	output, err := session.CombinedOutput(cmd)
+	var resp = fmt.Sprintf("%s", output)
+	fmt.Println("Server answer: " + resp + "---")
+	return resp, err
+}
+
 func manageWorker(address string, channel *chan com.Request, encoder *gob.Encoder) {
 
 	//Port is the port that the client will open a connection on, serverPort is the dedicated port to that connection from the server
@@ -162,7 +163,7 @@ func manageWorker(address string, channel *chan com.Request, encoder *gob.Encode
 	split := strings.Split(address, ":")
 	port, err := strconv.Atoi(split[1])
 	checkError(err)
-	var username = "a847803"
+	var username = "conte"
 	ssh, err := NewSshClient(
 		username,
 		split[0],
@@ -177,12 +178,10 @@ func manageWorker(address string, channel *chan com.Request, encoder *gob.Encode
 
 	var command string
 	command = fmt.Sprintf("./workerprac1 %d", port)
-	//command = "ls"
-	fmt.Println("Executing command " + command)
 	go ssh.RunCommand(command)
+	//fmt.Println(resp)
 	checkError(err)
-	//fmt.Println("Worker resp: " + resp)
-	time.Sleep(3000 * time.Millisecond) //Give time to client to set up
+	time.Sleep(2500 * time.Millisecond) //Give time to client to set up
 	var endpoint = address
 	tcpAddr, err := net.ResolveTCPAddr("tcp", endpoint)
 	conn, err := net.DialTCP("tcp", nil, tcpAddr)
