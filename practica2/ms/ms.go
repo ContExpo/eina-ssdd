@@ -53,9 +53,10 @@ func parsePeers(path string) (lines []string) {
 func (ms *MessageSystem) Send(pid int, msg Message) {
 	conn, err := net.Dial("tcp", ms.peers[pid-1])
 	checkError(err)
+	defer conn.Close()
 	encoder := gob.NewEncoder(conn)
 	err = encoder.Encode(&msg)
-	conn.Close()
+	checkError(err)
 }
 
 // Pre: True
@@ -93,10 +94,11 @@ func New(whoIam int, usersFile string, messageTypes []Message) (ms MessageSystem
 			default:
 				conn, err := listener.Accept()
 				checkError(err)
+				defer conn.Close()
 				decoder := gob.NewDecoder(conn)
 				var msg Message
 				err = decoder.Decode(&msg)
-				conn.Close()
+				checkError(err)
 				ms.mbox <- msg
 			}
 		}

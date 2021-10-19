@@ -11,10 +11,8 @@ package ra
 import (
 	"sync"
 
-	"../ms"
+	"prac2/ms"
 )
-
-type Message interface{}
 
 type Request struct {
 	Clock int
@@ -23,20 +21,13 @@ type Request struct {
 
 type Reply struct{}
 
-type MessageSystem struct {
-	mbox  chan Message
-	peers []string
-	done  chan bool
-	me    int
-}
-
 type RASharedDB struct {
 	OurSeqNum int
 	HigSeqNum int
 	OutRepCnt int
 	ReqCS     bool
 	RepDefd   []int
-	ms        *MessageSystem
+	ms        *ms.MessageSystem
 	done      chan bool
 	chrep     chan bool
 	Mutex     sync.Mutex // mutex para proteger concurrencia sobre las variables
@@ -44,9 +35,9 @@ type RASharedDB struct {
 }
 
 func New(me int, usersFile string) *RASharedDB {
-	var messageTypes = []ms.Message{Request, Reply}
-	msgs = ms.New(me, usersFile, messageTypes)
-	ra := RASharedDB{0, 0, 0, false, []int{}, &msgs, make(chan bool), make(chan bool), &sync.Mutex{}}
+	messageTypes := []ms.Message{Request{}, Reply{}}
+	var msgs = ms.New(me, usersFile, messageTypes)
+	ra := RASharedDB{0, 0, 0, false, []int{}, &msgs, make(chan bool), make(chan bool), sync.Mutex{}}
 	// TODO completar
 	return &ra
 }
@@ -68,10 +59,4 @@ func (ra *RASharedDB) PostProtocol() {
 func (ra *RASharedDB) Stop() {
 	ra.ms.Stop()
 	ra.done <- true
-}
-
-//Pre: True
-//Post: termina la ejecución de este ms
-func (ms *MessageSystem) Stop() {
-	ms.done <- true
 }
