@@ -47,8 +47,9 @@ func closeAfter(seconds int) {
 los primos dentro del intervalo
 */
 func main() {
-	go closeAfter(120)
+	// closeAfter(120)
 	if len(os.Args) != 2 {
+		fmt.Println("Wrong arguments")
 		return
 	}
 
