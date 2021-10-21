@@ -156,7 +156,7 @@ func (s *SshClient) RunCommand(cmd string) (string, error) {
 	return resp, err
 }
 
-func manageWorker(address string, channel *chan com.Request, encoder *gob.Encoder) {
+func manageWorker(address string, channel *chan com.Request, encoder **gob.Encoder) {
 
 	//Port is the port that the client will open a connection on, serverPort is the dedicated port to that connection from the server
 	fmt.Println("Trying to connect to worker at " + address)
@@ -200,7 +200,7 @@ func manageWorker(address string, channel *chan com.Request, encoder *gob.Encode
 		workerEncoder.Encode(req)
 		err = workerDecoder.Decode(&reply)
 		//fmt.Println("Sending: ", reply)
-		encoder.Encode(reply)
+		(*encoder).Encode(reply)
 	}
 }
 
@@ -213,20 +213,20 @@ func main() {
 	var encoder *gob.Encoder
 	var decoder *gob.Decoder
 
-	conn, err := listener.Accept()
-	defer conn.Close()
-	checkError(err)
-	encoder = gob.NewEncoder(conn)
-	decoder = gob.NewDecoder(conn)
-
 	file, err := os.Open("workers.txt")
 	checkError(err)
 	defer file.Close()
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
-		go manageWorker(scanner.Text(), &reqchan, encoder)
+		go manageWorker(scanner.Text(), &reqchan, &encoder)
 		//freePort = freePort + 1
 	}
+
+	conn, err := listener.Accept()
+	defer conn.Close()
+	checkError(err)
+	encoder = gob.NewEncoder(conn)
+	decoder = gob.NewDecoder(conn)
 
 	var req com.Request
 	fmt.Println("Server on\n")
