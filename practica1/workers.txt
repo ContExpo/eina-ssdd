@@ -1,2 +1,1 @@
-localhost:31000
-localhost:31001
+localhost:8000

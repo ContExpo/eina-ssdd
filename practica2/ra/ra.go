@@ -3,7 +3,7 @@
 * ASIGNATURA: 30221 Sistemas Distribuidos del Grado en Ingeniería Informática
 *			Escuela de Ingeniería y Arquitectura - Universidad de Zaragoza
 * FECHA: septiembre de 2021
-* FICHERO: ricart-agrawala.go
+* FICHERO: ra.go
 * DESCRIPCIÓN: Implementación del algoritmo de Ricart-Agrawala Generalizado en Go
  */
 package ra
@@ -22,7 +22,9 @@ type Request struct {
 type Reply struct{}
 
 type RASharedDB struct {
+	///Logical clock of the process
 	OurSeqNum int
+	///Highest sequence number of all processes
 	HigSeqNum int
 	OutRepCnt int
 	ReqCS     bool
@@ -46,7 +48,7 @@ func New(me int, usersFile string) *RASharedDB {
 //Post: Realiza  el  PreProtocol  para el  algoritmo de
 //      Ricart-Agrawala Generalizado
 func (ra *RASharedDB) PreProtocol() {
-	// TODO completar
+
 }
 
 //Pre: Verdad

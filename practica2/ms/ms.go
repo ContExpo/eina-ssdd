@@ -5,7 +5,8 @@
 * FECHA: septiembre de 2021
 * FICHERO: ms.go
 * DESCRIPCIÓN: Implementación de un sistema de mensajería asíncrono, insipirado en el Modelo Actor
- */
+				Esto es un singulo "actòr" en el sistema de mensajerìa
+*/
 package ms
 
 import (

@@ -39,7 +39,7 @@ func NewSshClient(user string, host string, port int, privateKeyPath string, pri
 		User: user,
 		Auth: []ssh.AuthMethod{
 			ssh.PublicKeys(signer),
-			ssh.Password("Arduino"),
+			ssh.Password("Alexyo00"),
 		},
 		HostKeyCallback: func(hostname string, remote net.Addr, key ssh.PublicKey) error {
 			// use OpenSSH's known_hosts file if you care about host validation
@@ -163,7 +163,7 @@ func manageWorker(address string, channel *chan com.Request, encoder *gob.Encode
 	split := strings.Split(address, ":")
 	port, err := strconv.Atoi(split[1])
 	checkError(err)
-	var username = "conte"
+	var username = "a847803"
 	ssh, err := NewSshClient(
 		username,
 		split[0],
@@ -207,15 +207,18 @@ func manageWorker(address string, channel *chan com.Request, encoder *gob.Encode
 func main() {
 
 	fmt.Println("Waiting for connection")
+	var reqchan = make(chan com.Request, 20)
 	listener, err := net.Listen("tcp", "127.0.0.1:30000")
-	//var freePort = 30001
 	checkError(err)
+	var encoder *gob.Encoder
+	var decoder *gob.Decoder
+
 	conn, err := listener.Accept()
 	defer conn.Close()
 	checkError(err)
-	encoder := gob.NewEncoder(conn)
-	decoder := gob.NewDecoder(conn)
-	var reqchan = make(chan com.Request, 20)
+	encoder = gob.NewEncoder(conn)
+	decoder = gob.NewDecoder(conn)
+
 	file, err := os.Open("workers.txt")
 	checkError(err)
 	defer file.Close()
@@ -224,6 +227,7 @@ func main() {
 		go manageWorker(scanner.Text(), &reqchan, encoder)
 		//freePort = freePort + 1
 	}
+
 	var req com.Request
 	fmt.Println("Server on\n")
 	var i = 0
