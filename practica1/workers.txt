@@ -1,2 +1,3 @@
-localhost:20008
-localhost:20007
+lab102-196.cps.unizar.es:25000
+lab102-196.cps.unizar.es:25001
+lab102-196.cps.unizar.es:25002
