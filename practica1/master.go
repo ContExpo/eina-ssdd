@@ -168,7 +168,7 @@ func manageWorker(address string, channel *chan com.Request, encoder **gob.Encod
 		username,
 		split[0],
 		22,
-		"/home/conte/.ssh/id_rsa",
+		"/home/a847803/.ssh/id_rsa",
 		"")
 	fmt.Println("Ended creating ssh object")
 	if err != nil {
