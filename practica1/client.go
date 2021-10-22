@@ -84,7 +84,6 @@ var printedRequests = 0
 
 func main() {
 	endpoint := "127.0.0.1:30000"
-	//endpoint := "lab102-210.cps.unizar.es:31000"
 	numIt := 10
 	requestTmp := runtime.GOMAXPROCS(0)
 	//requestTmp = 6

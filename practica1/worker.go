@@ -55,13 +55,13 @@ func main() {
 
 	var err error
 	CONN_TYPE := "tcp"
-	CONN_HOST := "0.0.0.0"
+	//CONN_HOST := "0.0.0.0"
 	CONN_PORT := os.Args[1]
 
 	fmt.Println("hello")
 
 	//Abrimos puerto
-	listener, err := net.Listen(CONN_TYPE, CONN_HOST+":"+CONN_PORT)
+	listener, err := net.Listen(CONN_TYPE, ":"+CONN_PORT)
 	checkError(err)
 	fmt.Println("Waiting for client")
 
@@ -83,7 +83,7 @@ func main() {
 
 	for {
 		//Recibimos la peticion
-		//fmt.Println("Awaiting request")
+		fmt.Println("Awaiting request")
 		err = decoder.Decode(&req)
 		//fmt.Println("Request received")
 		checkError(err)

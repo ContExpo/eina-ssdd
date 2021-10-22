@@ -39,7 +39,7 @@ func NewSshClient(user string, host string, port int, privateKeyPath string, pri
 		User: user,
 		Auth: []ssh.AuthMethod{
 			ssh.PublicKeys(signer),
-			ssh.Password("Alexyo00"),
+			ssh.Password("Arduino"),
 		},
 		HostKeyCallback: func(hostname string, remote net.Addr, key ssh.PublicKey) error {
 			// use OpenSSH's known_hosts file if you care about host validation
@@ -163,7 +163,7 @@ func manageWorker(address string, channel *chan com.Request, encoder **gob.Encod
 	split := strings.Split(address, ":")
 	port, err := strconv.Atoi(split[1])
 	checkError(err)
-	var username = "a847803"
+	var username = "conte"
 	ssh, err := NewSshClient(
 		username,
 		split[0],
@@ -177,14 +177,15 @@ func manageWorker(address string, channel *chan com.Request, encoder **gob.Encod
 	}
 
 	var command string
-	command = fmt.Sprintf("./workerprac1 %d", port)
+	command = fmt.Sprintf("./eina-ssdd/practica1/worker %d", port)
 	go ssh.RunCommand(command)
 	//fmt.Println(resp)
 	checkError(err)
 	time.Sleep(2500 * time.Millisecond) //Give time to client to set up
-	var endpoint = address
-	tcpAddr, err := net.ResolveTCPAddr("tcp", endpoint)
+	tcpAddr, err := net.ResolveTCPAddr("tcp", address)
+	checkError(err)
 	conn, err := net.DialTCP("tcp", nil, tcpAddr)
+	checkError(err)
 	fmt.Println("Dialing " + tcpAddr.String())
 	checkError(err)
 
@@ -221,7 +222,7 @@ func main() {
 		go manageWorker(scanner.Text(), &reqchan, &encoder)
 		//freePort = freePort + 1
 	}
-
+	fmt.Println("waiting for client")
 	conn, err := listener.Accept()
 	defer conn.Close()
 	checkError(err)
