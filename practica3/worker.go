@@ -6,20 +6,20 @@
 * FICHERO: worker.go
 * DESCRIPCIÓN: contiene la funcionalidad esencial para realizar los servidores
 *				correspondientes la practica 3
-*/
+ */
 package main
 
 import (
+	"fmt"
 	"log"
 	"math/rand"
 	"net"
 	"net/http"
 	"net/rpc"
 	"os"
+	"prac3/com"
 	"sync"
 	"time"
-	"fmt"
-	"practica3/com"
 )
 
 const (
@@ -109,6 +109,7 @@ func (p *PrimesImpl) FindPrimes(interval com.TPInterval, primeList *[]int) error
 
 func main() {
 	if len(os.Args) == 2 {
+		fmt.Println("Starting 10 secs sleep")
 		time.Sleep(10 * time.Second)
 		rand.Seed(time.Now().UnixNano())
 		primesImpl := new(PrimesImpl)
@@ -121,12 +122,13 @@ func main() {
 
 		rpc.Register(primesImpl)
 		rpc.HandleHTTP()
-		l, e := net.Listen("tcp", os.Args[1])
+		l, e := net.Listen("tcp", ":"+os.Args[1])
 		if e != nil {
 			log.Fatal("listen error:", e)
 		}
+		fmt.Println("Starting rpc")
 		http.Serve(l, nil)
 	} else {
-		fmt.Println("Usage: go run worker.go <ip:port>")
+		fmt.Println("Usage: go run worker.go <port>")
 	}
 }
