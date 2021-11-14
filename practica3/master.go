@@ -16,10 +16,12 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 )
 
+//PrimesImpl is the struct used to keep track of the metrics of FindPrimes
 type PrimesImpl struct {
 	delayMaxMilisegundos int
 	delayMinMiliSegundos int
@@ -27,14 +29,28 @@ type PrimesImpl struct {
 	behaviour            int
 	i                    int
 	mutex                sync.Mutex
+	//The channel where FindPrimes will push new requests
+	reqchan *chan ClientRequest
+	//In case a request cannot be handled cause of malfunctioning worker
+	//it will be put here to increase its priority
+	hiPrioReqchan *chan ClientRequest
 }
 
-type SshClient struct {
+//ClientRequest represents the struct passed to the goroutines to execute
+//FindPrimes for
+type ClientRequest struct {
+	interval com.TPInterval
+	reschan  *chan []int
+}
+
+//SSHClient struct
+type SSHClient struct {
 	Config *ssh.ClientConfig
 	Server string
 }
 
-func NewSshClient(user string, host string, port int, privateKeyPath string, privateKeyPassword string) (*SshClient, error) {
+//NewSSHClient generates a new SSH client to use
+func NewSSHClient(user string, host string, port int, privateKeyPath string, privateKeyPassword string) (*SSHClient, error) {
 	// read private key file
 	pemBytes, err := ioutil.ReadFile(privateKeyPath)
 	if err != nil {
@@ -58,7 +74,7 @@ func NewSshClient(user string, host string, port int, privateKeyPath string, pri
 		},
 	}
 
-	client := &SshClient{
+	client := &SSHClient{
 		Config: config,
 		Server: fmt.Sprintf("%v:%v", host, port),
 	}
@@ -144,7 +160,8 @@ func checkError(err error) {
 
 // Opens a new SSH connection and runs the specified command
 // Returns the combined output of stdout and stderr
-func (s *SshClient) RunCommand(cmd string) (string, error) {
+// @param clientRef where to put the reference to the new client
+func (s *SSHClient) runCommand(cmd string, clientRef **ssh.Client) (string, error) {
 	// open connection
 	conn, err := ssh.Dial("tcp", s.Server, s.Config)
 	if err != nil {
@@ -161,13 +178,13 @@ func (s *SshClient) RunCommand(cmd string) (string, error) {
 
 	// run command and capture stdout/stderr
 	fmt.Println("Executing command " + cmd)
-	output, err := session.CombinedOutput(cmd)
+	output, err := (session).CombinedOutput(cmd)
 	var resp = fmt.Sprintf("%s", output)
 	fmt.Println("Server answer: " + resp + "---")
 	return resp, err
 }
 
-func manageWorker(address string) {
+func manageWorker(address string, primesImpl *PrimesImpl) {
 
 	//Port is the port that the client will open a connection on, serverPort is the dedicated port to that connection from the server
 	fmt.Println("Trying to connect to worker at " + address)
@@ -175,7 +192,7 @@ func manageWorker(address string) {
 	port, err := strconv.Atoi(split[1])
 	checkError(err)
 	var username = "conte"
-	ssh, err := NewSshClient(
+	sshConfig, err := NewSSHClient(
 		username,
 		split[0],
 		22,
@@ -194,47 +211,83 @@ func manageWorker(address string) {
 	} else if username == "a847803" {
 		command = fmt.Sprintf("./worker %d", port)
 	}
-
-	go ssh.RunCommand(command)
+	var sshClient *ssh.Client
+	go sshConfig.runCommand(command, &sshClient)
 	//fmt.Println(resp)
 	checkError(err)
-
-	client, err := rpc.DialHTTP("tcp", address)
+	//I know that the worker needs 10 secs to set up, so
+	time.Sleep(time.Second * 10)
+	rpcClient, err := rpc.DialHTTP("tcp", address)
 	if err != nil {
 		log.Fatal("Error dialing:", err)
 	}
-	var reply *[]int
-	for req := range reqchan {
-		//3) la goroutine que coja la tarea invoca por RPC al worker
-		//4) la goroutine le devuelve el resultado al master.
-		err = client.Call("PrimesImpl.FindPrimes", req, &reply)
-		//aquì voy a gestionar los varios errores que se pueden encontrar
-		if err != nil {
-			log.Fatal("primes error:", err)
+	var reply []int
+	var clientReq ClientRequest
+	for {
+		/*Infinite loop of a goroutine. First we check if any high priority
+		request is waiting for another goroutine to elaborate it. Otherwise we
+		read from the default queue
+		*/
+		if len(*primesImpl.hiPrioReqchan) > 0 {
+			clientReq = <-*primesImpl.hiPrioReqchan
+		} else {
+			clientReq = <-*primesImpl.reqchan
 		}
-		//Now I've gotten the result of the call. How do I return them to the
-		//FindPrimes??
-		reschan <- reply
-		//I could use an asynchronous channel like this.
-		//But let's say I have 5 FindPrimes waiting for an answer. Nobody
-		//assures me the right one will get the answer
-	}
 
+		/*Making asynchronous call to the client. As for documentation, the only
+		way for the call not to be completed is if the client invoked RPC does NOT
+		return. For example in a case of omission.*/
+		var rpcReq = rpcClient.Go("PrimesImpl.FindPrimes", clientReq, &reply, nil)
+
+		/*I give the client 1.5 seconds in which he can terminate the call. If
+		it doesn't happen and rpc.Go doesn't return an error, it's either a
+		delay or a omission. In this case I pass the tarea to another goroutine
+		and will decide what to do.
+		In total, there is 20% chance to have a delay and another 20 to have an omission.
+		Let's suppose time wasted for a delay is 6 secs (that will be the avg
+		time that the client will need to respond)), while time used for a restart
+		will be 17.5 seconds (7.5 secs to see if the client is alive and then 10 to
+		restart the client). We need to choose what's the best way to handle these 2
+		errors, keeping in mind that there are equal chances that those 2 will happen
+		*/
+		for i := 0; i < 20; i++ {
+			time.Sleep(100 * time.Millisecond)
+			if len(rpcReq.Done) == 0 {
+				continue
+			} else {
+				err = rpcReq.Error
+				//If the worker has some error
+				if err != nil {
+					//I push the request in the high prio channel
+					*primesImpl.hiPrioReqchan <- clientReq
+					//Closing the ssh client to restart it
+					sshClient.Close()
+					go manageWorker(address, primesImpl)
+					return
+				}
+				*clientReq.reschan <- reply
+				//Since we need to create a new one, we make sure the previous client is closed.
+				sshClient.Close()
+				return
+			}
+		}
+		/*if we got here it's because after 2 seconds the worker has not responded nor terminated with an
+		error. At this point we assume it's either a delay or an omission -> our strategy makes us restart
+		the worker now and push the request in the hi prio channel */
+		*primesImpl.hiPrioReqchan <- clientReq
+		go manageWorker(address, primesImpl)
+		return
+	}
 }
 
+//FindPrimes gets invoked remotely by client/proxy and passes the result to the goroutines
 func (p *PrimesImpl) FindPrimes(interval com.TPInterval, primeList *[]int) error {
-	reqchan <- interval
-	//1) poner la tarea en el canal sincrono donde escuchan las gorutines OK
-	//2) el master se queda bloqueado a la espera de obtener el resultado
-	primeList = <-reschan
-	//As I said, I have no way to be sure this is the right answer to the client's
-	//request
+	var reschan = make(chan []int)
+	*p.reqchan <- ClientRequest{interval, &reschan}
+	var resp = <-reschan
+	primeList = &resp
 	return nil
 }
-
-//The two synchronous channels
-var reqchan chan com.TPInterval
-var reschan chan *[]int
 
 func main() {
 
@@ -246,24 +299,26 @@ func main() {
 	}
 	fmt.Println("Opening server on ", endpoint)
 
-	reqchan = make(chan com.TPInterval)
-	reschan = make(chan *[]int)
+	var reqchan = make(chan ClientRequest, 20)
+	var hiPrioReqchan = make(chan ClientRequest, 20)
 
 	file, err := os.Open("workers.txt")
 	checkError(err)
 	defer file.Close()
 	scanner := bufio.NewScanner(file)
 	var i = 0
-	for scanner.Scan() {
-		go manageWorker(scanner.Text())
-		i++
-	}
 	primesImpl := new(PrimesImpl)
 	primesImpl.delayMaxMilisegundos = 4000
 	primesImpl.delayMinMiliSegundos = 2000
 	primesImpl.behaviourPeriod = 4
 	primesImpl.i = 1
 	primesImpl.behaviour = 0
+	primesImpl.reqchan = &reqchan
+	primesImpl.hiPrioReqchan = &hiPrioReqchan
+	for scanner.Scan() {
+		go manageWorker(scanner.Text(), primesImpl)
+		i++
+	}
 	rpc.Register(primesImpl)
 	rpc.HandleHTTP()
 	l, e := net.Listen("tcp", endpoint)
