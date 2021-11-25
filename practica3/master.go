@@ -165,13 +165,15 @@ func (s *SSHClient) runCommand(cmd string, clientRef **ssh.Client) (string, erro
 	// open connection
 	conn, err := ssh.Dial("tcp", s.Server, s.Config)
 	if err != nil {
+		fmt.Printf("Dial to %v failed %v", s.Server, err)
 		return "", fmt.Errorf("Dial to %v failed %v", s.Server, err)
 	}
 	defer conn.Close()
-
+	*clientRef = conn
 	// open session
 	session, err := conn.NewSession()
 	if err != nil {
+		fmt.Printf("Create session for %v failed %v", s.Server, err)
 		return "", fmt.Errorf("Create session for %v failed %v", s.Server, err)
 	}
 	defer session.Close()
@@ -181,22 +183,25 @@ func (s *SSHClient) runCommand(cmd string, clientRef **ssh.Client) (string, erro
 	output, err := (session).CombinedOutput(cmd)
 	var resp = fmt.Sprintf("%s", output)
 	fmt.Println("Server answer: " + resp + "---")
+	if err != nil {
+		fmt.Printf("Error after command call at %v, error %v", s.Server, err)
+	}
 	return resp, err
 }
 
 func manageWorker(address string, primesImpl *PrimesImpl) {
-
 	//Port is the port that the client will open a connection on, serverPort is the dedicated port to that connection from the server
 	fmt.Println("Trying to connect to worker at " + address)
 	split := strings.Split(address, ":")
 	port, err := strconv.Atoi(split[1])
 	checkError(err)
 	var username = "conte"
+	var path = "/home/" + username + "/.ssh/id_rsa"
 	sshConfig, err := NewSSHClient(
 		username,
 		split[0],
 		22,
-		"/home/a847803/.ssh/id_rsa",
+		path,
 		"")
 	fmt.Println("Ended creating ssh object")
 	if err != nil {
@@ -207,23 +212,26 @@ func manageWorker(address string, primesImpl *PrimesImpl) {
 
 	var command string
 	if username == "conte" {
-		command = fmt.Sprintf("go run ./eina-ssdd/practica1/worker.go %d", port)
+		command = fmt.Sprintf("./eina-ssdd/practica3/worker %d", port)
 	} else if username == "a847803" {
-		command = fmt.Sprintf("./worker %d", port)
+		command = fmt.Sprintf("./worker3 %d", port)
 	}
 	var sshClient *ssh.Client
 	go sshConfig.runCommand(command, &sshClient)
 	//fmt.Println(resp)
 	checkError(err)
 	//I know that the worker needs 10 secs to set up, so
-	time.Sleep(time.Second * 10)
+	fmt.Println("Waiting 11 seconds")
+	time.Sleep(time.Second * 11)
 	rpcClient, err := rpc.DialHTTP("tcp", address)
 	if err != nil {
 		log.Fatal("Error dialing:", err)
 	}
 	var reply []int
 	var clientReq ClientRequest
+	fmt.Println("Starting functioning loop")
 	for {
+		var finished = false
 		/*Infinite loop of a goroutine. First we check if any high priority
 		request is waiting for another goroutine to elaborate it. Otherwise we
 		read from the default queue
@@ -237,27 +245,20 @@ func manageWorker(address string, primesImpl *PrimesImpl) {
 		/*Making asynchronous call to the client. As for documentation, the only
 		way for the call not to be completed is if the client invoked RPC does NOT
 		return. For example in a case of omission.*/
-		var rpcReq = rpcClient.Go("PrimesImpl.FindPrimes", clientReq, &reply, nil)
-
-		/*I give the client 1.5 seconds in which he can terminate the call. If
-		it doesn't happen and rpc.Go doesn't return an error, it's either a
-		delay or a omission. In this case I pass the tarea to another goroutine
-		and will decide what to do.
-		In total, there is 20% chance to have a delay and another 20 to have an omission.
-		Let's suppose time wasted for a delay is 6 secs (that will be the avg
-		time that the client will need to respond)), while time used for a restart
-		will be 17.5 seconds (7.5 secs to see if the client is alive and then 10 to
-		restart the client). We need to choose what's the best way to handle these 2
-		errors, keeping in mind that there are equal chances that those 2 will happen
-		*/
-		for i := 0; i < 20; i++ {
+		fmt.Println("Executing FindPrimes call to ", address)
+		var rpcReq = rpcClient.Go("PrimesImpl.FindPrimes", clientReq.interval, &reply, nil)
+		//first iteration: 2 secs before I start being worried about worker
+		//----------------------------------------------------------------
+		for i := 0; i < 15; i++ {
 			time.Sleep(100 * time.Millisecond)
 			if len(rpcReq.Done) == 0 {
 				continue
 			} else {
-				err = rpcReq.Error
+				replyCall := <-rpcReq.Done
+				err = replyCall.Error
 				//If the worker has some error
 				if err != nil {
+					fmt.Printf("RPC call returned error %v, restarting", err)
 					//I push the request in the high prio channel
 					*primesImpl.hiPrioReqchan <- clientReq
 					//Closing the ssh client to restart it
@@ -266,17 +267,55 @@ func manageWorker(address string, primesImpl *PrimesImpl) {
 					return
 				}
 				*clientReq.reschan <- reply
-				//Since we need to create a new one, we make sure the previous client is closed.
-				sshClient.Close()
-				return
+				finished = true
+				continue
 			}
 		}
-		/*if we got here it's because after 2 seconds the worker has not responded nor terminated with an
-		error. At this point we assume it's either a delay or an omission -> our strategy makes us restart
-		the worker now and push the request in the hi prio channel */
-		*primesImpl.hiPrioReqchan <- clientReq
-		go manageWorker(address, primesImpl)
-		return
+		//If I got an answer I skip to the next request, otherwise wait for errors
+		if finished {
+			continue
+		} else {
+			fmt.Println("Attention! request took more than 2 secs")
+			//*primesImpl.hiPrioReqchan <- clientReq
+			//------------------------------------------------------------
+			//Probably something is wrong: I will wait 4 more seconds, and if I
+			//don't get an answer from the client I will assume it crashed so I
+			//will restart it.
+			for i := 0; i < 40; i++ {
+				fmt.Println("Secondloop")
+				time.Sleep(100 * time.Millisecond)
+				if len(rpcReq.Done) == 0 {
+					continue
+				} else {
+					fmt.Println("Got response in second loop")
+					replyCall := <-rpcReq.Done
+					err = replyCall.Error
+					if err != nil {
+						fmt.Printf("RPC call returned error %v, restarting", err)
+						//I push the request in the high prio channel
+						*primesImpl.hiPrioReqchan <- clientReq
+						//Closing the ssh client to restart it
+						sshClient.Close()
+						go manageWorker(address, primesImpl)
+						return
+					}
+					if err == nil {
+						fmt.Println("RPC returned no error.")
+						*clientReq.reschan <- reply
+						finished = true
+						break
+					}
+				}
+			}
+			if finished {
+				continue
+			} else {
+				fmt.Println("Worker took more than 6 secs. Restarting")
+				/*sshClient.Close()
+				go manageWorker(address, primesImpl)
+				return*/
+			}
+		}
 	}
 }
 
@@ -284,8 +323,11 @@ func manageWorker(address string, primesImpl *PrimesImpl) {
 func (p *PrimesImpl) FindPrimes(interval com.TPInterval, primeList *[]int) error {
 	var reschan = make(chan []int)
 	*p.reqchan <- ClientRequest{interval, &reschan}
+	var i = p.i
+	p.i++
 	var resp = <-reschan
 	primeList = &resp
+	fmt.Println("Returning response to ", i)
 	return nil
 }
 

@@ -35,6 +35,7 @@ type PrimesImpl struct {
 	behaviourPeriod      int
 	behaviour            int
 	i                    int
+	l                    net.Listener
 	mutex                sync.Mutex
 }
 
@@ -67,6 +68,7 @@ func findPrimes(interval com.TPInterval) (primes []int) {
 // POST: FindPrimes devuelve todos los números primos comprendidos en el
 // 		intervalo [interval.A, interval.B]
 func (p *PrimesImpl) FindPrimes(interval com.TPInterval, primeList *[]int) error {
+	fmt.Println("Got FindPrimes request with interval ", interval)
 	p.mutex.Lock()
 	if p.i%p.behaviourPeriod == 0 {
 		p.behaviourPeriod = rand.Intn(20-2) + 2
@@ -86,12 +88,16 @@ func (p *PrimesImpl) FindPrimes(interval com.TPInterval, primeList *[]int) error
 	p.mutex.Unlock()
 	switch p.behaviour {
 	case DELAY:
+		fmt.Println("Delay")
 		seconds := rand.Intn(p.delayMaxMilisegundos-p.delayMinMiliSegundos) + p.delayMinMiliSegundos
 		time.Sleep(time.Duration(seconds) * time.Millisecond)
 		*primeList = findPrimes(interval)
 	case CRASH:
+		fmt.Println("Crashing")
+		p.l.Close()
 		os.Exit(1)
 	case OMISSION:
+		fmt.Println("Omission")
 		option := rand.Intn(100)
 		if option > 65 {
 			time.Sleep(time.Duration(10000) * time.Second)
@@ -110,7 +116,7 @@ func (p *PrimesImpl) FindPrimes(interval com.TPInterval, primeList *[]int) error
 func main() {
 	if len(os.Args) == 2 {
 		fmt.Println("Starting 10 secs sleep")
-		time.Sleep(10 * time.Second)
+		//time.Sleep(10 * time.Second)
 		rand.Seed(time.Now().UnixNano())
 		primesImpl := new(PrimesImpl)
 		primesImpl.delayMaxMilisegundos = 4000
@@ -126,6 +132,7 @@ func main() {
 		if e != nil {
 			log.Fatal("listen error:", e)
 		}
+		primesImpl.l = l
 		fmt.Println("Starting rpc")
 		http.Serve(l, nil)
 	} else {
