@@ -189,6 +189,20 @@ func (s *SSHClient) runCommand(cmd string, clientRef **ssh.Client) (string, erro
 	return resp, err
 }
 
+//safeWrite will write the given element in the channel, telling us if it panics
+//for writing on a closed channel. If this happens it's not a problem since it
+//will mean the RPC req has already been served.
+func safeWrite(chn *chan []int, elem []int) {
+	defer func() {
+		if err := recover(); err != nil {
+			log.Println("Eheh gotcha", err)
+		}
+	}()
+	fmt.Println("Risky write")
+	*chn <- elem
+	fmt.Println("Risky write done")
+}
+
 func manageWorker(address string, primesImpl *PrimesImpl) {
 	//Port is the port that the client will open a connection on, serverPort is the dedicated port to that connection from the server
 	fmt.Println("Trying to connect to worker at " + address)
@@ -222,7 +236,7 @@ func manageWorker(address string, primesImpl *PrimesImpl) {
 	checkError(err)
 	//I know that the worker needs 10 secs to set up, so
 	fmt.Println("Waiting 11 seconds")
-	time.Sleep(time.Second * 11)
+	time.Sleep(time.Second * 12)
 	rpcClient, err := rpc.DialHTTP("tcp", address)
 	if err != nil {
 		log.Fatal("Error dialing:", err)
@@ -238,6 +252,7 @@ func manageWorker(address string, primesImpl *PrimesImpl) {
 		*/
 		if len(*primesImpl.hiPrioReqchan) > 0 {
 			clientReq = <-*primesImpl.hiPrioReqchan
+			fmt.Println("Parsing from hi prio chan")
 		} else {
 			clientReq = <-*primesImpl.reqchan
 		}
@@ -247,9 +262,9 @@ func manageWorker(address string, primesImpl *PrimesImpl) {
 		return. For example in a case of omission.*/
 		fmt.Println("Executing FindPrimes call to ", address)
 		var rpcReq = rpcClient.Go("PrimesImpl.FindPrimes", clientReq.interval, &reply, nil)
-		//first iteration: 2 secs before I start being worried about worker
+		//first iteration: 1.8 secs before I start being worried about worker
 		//----------------------------------------------------------------
-		for i := 0; i < 15; i++ {
+		for i := 0; i < 30; i++ {
 			time.Sleep(100 * time.Millisecond)
 			if len(rpcReq.Done) == 0 {
 				continue
@@ -265,10 +280,11 @@ func manageWorker(address string, primesImpl *PrimesImpl) {
 					sshClient.Close()
 					go manageWorker(address, primesImpl)
 					return
+				} else {
+					go safeWrite(clientReq.reschan, reply)
+					finished = true
+					continue
 				}
-				*clientReq.reschan <- reply
-				finished = true
-				continue
 			}
 		}
 		//If I got an answer I skip to the next request, otherwise wait for errors
@@ -276,7 +292,7 @@ func manageWorker(address string, primesImpl *PrimesImpl) {
 			continue
 		} else {
 			fmt.Println("Attention! request took more than 2 secs")
-			//*primesImpl.hiPrioReqchan <- clientReq
+			*primesImpl.hiPrioReqchan <- clientReq
 			//------------------------------------------------------------
 			//Probably something is wrong: I will wait 4 more seconds, and if I
 			//don't get an answer from the client I will assume it crashed so I
@@ -301,8 +317,9 @@ func manageWorker(address string, primesImpl *PrimesImpl) {
 					}
 					if err == nil {
 						fmt.Println("RPC returned no error.")
-						*clientReq.reschan <- reply
+						go safeWrite(clientReq.reschan, reply)
 						finished = true
+						fmt.Println("Breaking")
 						break
 					}
 				}
@@ -311,9 +328,10 @@ func manageWorker(address string, primesImpl *PrimesImpl) {
 				continue
 			} else {
 				fmt.Println("Worker took more than 6 secs. Restarting")
-				/*sshClient.Close()
+				rpcClient.Close()
+				sshClient.Close()
 				go manageWorker(address, primesImpl)
-				return*/
+				return
 			}
 		}
 	}

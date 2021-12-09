@@ -129,12 +129,16 @@ func main() {
 		rpc.Register(primesImpl)
 		rpc.HandleHTTP()
 		l, e := net.Listen("tcp", ":"+os.Args[1])
+		defer l.Close()
 		if e != nil {
 			log.Fatal("listen error:", e)
 		}
 		primesImpl.l = l
 		fmt.Println("Starting rpc")
-		http.Serve(l, nil)
+		err := http.Serve(l, nil)
+		if err != nil {
+			os.Exit(1)
+		}
 	} else {
 		fmt.Println("Usage: go run worker.go <port>")
 	}
