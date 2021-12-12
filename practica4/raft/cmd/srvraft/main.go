@@ -1,12 +1,13 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"log"
-	"net"
 	"net/rpc"
-	rpctimeout "raft/internal/comun/rpc"
-	"time"
+	"os"
+	"raft/internal/despliegue"
+	"raft/internal/raft"
 )
 
 //Args some arguments
@@ -24,45 +25,49 @@ func (t *Arith) Mul(args *Args, reply *int) error {
 }
 
 func main() {
-	arith := new(Arith)
-	// Parte Servidor
-	rpc.Register(arith)
 
-	l, e := net.Listen("tcp", ":1234")
-	if e != nil {
-		log.Fatal("listen error:", e)
+	mydir, err := os.Getwd()
+	if err != nil {
+		fmt.Println(err)
+	}
+	fmt.Println(mydir)
+	var rpcConns = startNodes()
+	var nodos [3]*raft.Nodo
+	for i := 0; i < 3; i++ {
+		nodos[i] = raft.NuevoNodo(rpcConns, i, nil, i*3)
+	}
+}
+
+func startNodes() (nodos []*rpc.Client) {
+	var hosts []string
+	file, err := os.Open("workers.txt")
+	checkError(err)
+	defer file.Close()
+	scanner := bufio.NewScanner(file)
+
+	var i = 0
+	for scanner.Scan() {
+		hosts = append(hosts, scanner.Text())
+		i++
 	}
 
-	// Quitar el lanzamiento de la gorutina, pero no el código interno.
-	// Solo se necesita para esta prueba dado que cliente y servidor estan,
-	// aqui, juntos
-	go func() {
-		for {
-			conn, err := l.Accept()
-			if err != nil {
-				continue
-			}
+	var username = "conte"
+	var path = "/home/" + username + "/.ssh/id_rsa"
 
-			go rpc.ServeConn(conn)
+	despliegue.ExecMutipleNodes("./nodep4", hosts, nil, path)
+
+	for j := 0; j < len(hosts); j++ {
+		nodos[i], err = rpc.DialHTTP("tcp", hosts[i])
+		if err != nil {
+			log.Fatal("Error dialing:", err)
 		}
-	}()
-
-	time.Sleep(100 * time.Millisecond)
-
-	// Parte Cliente
-	client, err := rpc.Dial("tcp", "127.0.0.1:1234")
-	if err != nil {
-		log.Fatal("dialing:", err)
 	}
+	return nodos
+}
 
-	var reply int
-	args := Args{5, 7}
-	err = rpctimeout.CallTimeout(client, "t.Mul", &args,
-		&reply, 5*time.Millisecond)
-
+func checkError(err error) {
 	if err != nil {
-		log.Fatal("arith error:", err)
+		fmt.Fprintf(os.Stderr, "Fatal error: %s", err.Error())
+		os.Exit(1)
 	}
-
-	fmt.Printf("Arith: %d * %d = %d", args.A, args.B, reply)
 }

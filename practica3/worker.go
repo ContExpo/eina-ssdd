@@ -116,7 +116,7 @@ func (p *PrimesImpl) FindPrimes(interval com.TPInterval, primeList *[]int) error
 func main() {
 	if len(os.Args) == 2 {
 		fmt.Println("Starting 10 secs sleep")
-		//time.Sleep(10 * time.Second)
+		time.Sleep(10 * time.Second)
 		rand.Seed(time.Now().UnixNano())
 		primesImpl := new(PrimesImpl)
 		primesImpl.delayMaxMilisegundos = 4000

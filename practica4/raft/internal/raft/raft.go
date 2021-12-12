@@ -25,7 +25,9 @@ import (
 	"log"
 	"net/rpc"
 	"os"
+	rpctimeout "raft/internal/comun/rpc"
 	"sync"
+	"time"
 )
 
 // EnableDebugLogs false deshabilita por completo los logs de depuracion
@@ -50,21 +52,26 @@ type AplicaOperacion struct {
 // Nodo Tipo de dato Go que representa un solo nodo (réplica) de raft
 type Nodo struct {
 	//Persistent states on all nodes
-	mux      sync.Mutex            // Mutex para proteger acceso a estado compartido
-	nodos    []*rpc.Client         // Conexiones RPC a todos los nodos (réplicas) Raft
-	yo       int                   // this peer's index into peers[]
-	logger   *log.Logger           //A logger
-	Mandate  int                   //Current Mandate of election
-	votedFor int                   //Who did I vote for
-	leader   int                   //The leader of the Mandate. -1 means there's no leader yet
-	isLeader bool                  //If the node thinks he's the leader
-	opchan   *chan AplicaOperacion //The channel where to push the new operations
-	// mirar figura 2 para descripción del estado que debe mantener un nodo Raft
+	mux           sync.Mutex            // Mutex para proteger acceso a estado compartido
+	nodos         []*rpc.Client         // Conexiones RPC a todos los nodos (réplicas) Raft
+	yo            int                   // this peer's index into peers[]
+	logger        *log.Logger           //A logger
+	currentTerm   int                   //Current term of election
+	votedFor      int                   //Who did I vote for
+	currentLeader int                   //The node believed to be the leader for the current Term
+	isLeader      bool                  //If the node thinks he's the leader
+	opchan        *chan AplicaOperacion //The channel where to push the new operations
+	ht            []Operacion           //Int array where to store the data. Functions as an hashtable with h(i) = i
+	lastHeartbeat time.Time             //Needed to track last received heartbeat
+	sleepTime     int                   //Period of time of "not contact" needed to start an election
+	sleepTimeStr  string                //String of sleep time needed for duration
 
-	//Volatile state
-	commitIndex int   //Highest known commit index
-	lastApplied int   //Index of highest log entry applied to state machine
-	ht          []int //Int array where to store the data. Functions as an hashtable with h(i) = i
+	//Volatile state for all
+	thisCommitIndex int //Highest known commit index
+	thisLastApplied int //Index of highest log entry applied to state machine
+	//Volatile state for leader
+	nextIndex   []int //Currently known highest entries in other nodes
+	commitIndex []int //Currently known index of the highest committed op in the other nodes
 }
 
 // Creacion de un nuevo nodo de eleccion
@@ -80,11 +87,20 @@ type Nodo struct {
 
 // NuevoNodo debe devolver resultado rápido, por lo que se deberían
 // poner en marcha Gorutinas para trabajos de larga duracion
-func NuevoNodo(nodos []*rpc.Client, yo int, canalAplicar *chan AplicaOperacion) *Nodo {
+func NuevoNodo(nodos []*rpc.Client, yo int,
+	canalAplicar *chan AplicaOperacion,
+	sleepTime int) *Nodo {
 	nd := &Nodo{}
 	nd.nodos = nodos
 	nd.yo = yo
-
+	nd.thisCommitIndex = 0
+	nd.isLeader = false
+	nd.thisLastApplied = 0
+	for i := 0; i < len(nd.commitIndex); i++ {
+		nd.commitIndex[i] = 0
+		nd.nextIndex[i] = 0
+	}
+	nd.votedFor = -1
 	if EnableDebugLogs {
 		nombreNodo := fmt.Sprintf("%d", yo)
 		logPrefix := fmt.Sprintf("%s ", nombreNodo)
@@ -109,9 +125,13 @@ func NuevoNodo(nodos []*rpc.Client, yo int, canalAplicar *chan AplicaOperacion) 
 	}
 
 	// Your initialization code here (2A, 2B)
-	nd.Mandate = 1
-	nd.ht = make([]int, 100)
+	nd.currentTerm = 1
+	nd.ht = make([]Operacion, 100)
 	nd.opchan = canalAplicar
+
+	nd.sleepTime = sleepTime
+	nd.sleepTimeStr = fmt.Sprintf("%ds", sleepTime)
+	go nd.heartbeatListener()
 	return nd
 }
 
@@ -140,7 +160,7 @@ func (nd *Nodo) ParaNodo(nombre *int, err *error) {
 // ObtenerEstado devuelve "yo", mandato en curso y si este nodo cree ser lider
 //
 func (nd *Nodo) ObtenerEstado() (int, int, bool) {
-	return nd.yo, nd.Mandate, nd.isLeader
+	return nd.yo, nd.currentTerm, nd.isLeader
 }
 
 // El servicio que utilice Raft (base de datos clave/valor, por ejemplo)
@@ -158,42 +178,133 @@ func (nd *Nodo) ObtenerEstado() (int, int, bool) {
 // la operacion si consigue comprometerse.
 // El segundo valor es el mandato en curso
 // El tercer valor es true si el nodo cree ser el lider
-func (nd *Nodo) SometerOperacion(operacion interface{}) (indice int,
+func (nd *Nodo) SometerOperacion(operacion AplicaOperacion) (indice int,
 	mandato int, isLeader bool) {
 	if !nd.isLeader {
-		return -1, nd.Mandate, false
+		return -1, nd.currentTerm, false
 	}
+	*nd.opchan <- operacion
+	return indice, nd.currentTerm, isLeader
+}
 
-	// Vuestro codigo aqui
+//CommitRequest is the structure sent by the leader to the followers
+// to commit operations
+type CommitRequest struct {
+	Op       Operacion
+	Index    int
+	LeaderID int
+	Term     int
+}
 
-	return indice, nd.Mandate, isLeader
+//CommitAnswer is the struct returned by a follower node when it receives a
+//commit request
+type CommitAnswer struct {
+	Success bool
+	Term    int
+}
+
+//ComprometerOperacion es la funciòn RPC llamada por el master en los seguidores
+//para intentar de comprometer una operacion
+func (nd *Nodo) ComprometerOperacion(args *CommitRequest, ans *CommitAnswer) {
+	nd.mux.Lock()
+	nd.lastHeartbeat = time.Now()
+	defer nd.mux.Unlock()
+	if nd.currentTerm > args.Term {
+		ans.Term = nd.currentTerm
+		ans.Success = false
+		return
+	}
+	nd.currentTerm = args.Term
+	nd.currentLeader = args.LeaderID
+	nd.ht[args.Index] = args.Op
+	ans.Success = true
+}
+
+// Operacion is the struct used to represent an operation saved in the state
+// machine
+// ===============
+// Structura de ejemplo de argumentos de RPC PedirVoto.
+//
+// Recordar
+// -----------
+// Nombres de campos deben comenzar con letra mayuscula !
+//
+type Operacion struct {
+	Value int //Value of the operation to save
+	N_ACK int //The amount of follower nodes that acknowledged the operation
 }
 
 // RequestVoteArgs struct to send a VoteRequest
+// ===============
+// Structura de ejemplo de argumentos de RPC PedirVoto.
+//
+// Recordar
+// -----------
+// Nombres de campos deben comenzar con letra mayuscula !
+//
 type RequestVoteArgs struct {
-	CandidateID    int //The candidate asking for vote
-	Mandate        int //The Mandate for which we ask the vote for
-	LastLogIndex   int
-	LastLogMandate int
+	Term        int
+	CandidateID int
 }
 
 //
 // RequestVoteReply struct to send an answer to a vote request
+// ================
 type RequestVoteReply struct {
-	Mandate     int  //Mandate of the receiving nd
-	voteGranted bool //If the vote was granted
+	Term        int
+	VoteGranted bool
 }
 
-// NewLeaderCallArgs struct to send a message to others to communicate being
-//the new leader
-type NewLeaderCallArgs struct {
-	Leader  int //Who is communicating to be the new leader
-	Mandate int //The Mandate for which we ask the vote for
-}
+//EmpezarElecion es llamada por heartbeatListener cuando se da cuenta que
+//el leader està en timeout
+func (nd *Nodo) EmpezarElecion() {
+	timeout, err := time.ParseDuration("500ms")
+	if err != nil {
 
-//HeartBeat is a keep-alive message the leader sends to its followers to
-//confirm them its well-being
-type HeartBeat NewLeaderCallArgs
+	}
+
+	nd.mux.Lock()
+	var term = nd.currentTerm + 1
+	nd.mux.Unlock()
+	nd.updateTerm(term, false)
+
+	nd.mux.Lock()
+
+	//number of other notes that voted for me
+	var votedForMe = 0
+	for index, node := range nd.nodos {
+		//I need to use a break because the range expression won't allow
+		//a condition to stop the loop
+
+		//To ignore unused variable
+		_ = index
+
+		var requestVoteArgs = RequestVoteArgs{Term: nd.currentTerm,
+			CandidateID: nd.yo}
+		var response = RequestVoteReply{}
+		var error = rpctimeout.CallTimeout(node, "nd.PedirVoto", &requestVoteArgs,
+			&response, timeout)
+		if error != nil {
+			//If I find a node with a higher mandate than me I quit the election
+			if nd.currentTerm < response.Term {
+				nd.mux.Unlock()
+				nd.updateTerm(response.Term, false)
+				return
+			}
+			//If I get granted a vote
+			if response.VoteGranted {
+				votedForMe++
+				if votedForMe > len(nd.nodos)/2 {
+					nd.isLeader = true
+					nd.currentLeader = nd.yo
+				}
+			}
+		}
+	}
+
+	return
+
+}
 
 //
 // PedirVoto RPC method to ask to the other actors a vote to choose a new leader
@@ -202,38 +313,25 @@ type HeartBeat NewLeaderCallArgs
 // Metodo para RPC PedirVoto
 //
 func (nd *Nodo) PedirVoto(args *RequestVoteArgs, reply *RequestVoteReply) {
-	if args.Mandate > nd.Mandate {
-		nd.mux.Lock()
-		nd.Mandate = args.Mandate
+	nd.mux.Lock()
+	if nd.currentTerm <= args.Term {
+		nd.currentTerm = args.Term
 		nd.votedFor = -1
+	}
+
+	if nd.votedFor == -1 && nd.currentTerm == args.Term {
+		nd.votedFor = args.CandidateID
+		nd.currentTerm = args.Term
+		reply.VoteGranted = true
+		reply.Term = nd.currentTerm
 		nd.mux.Unlock()
+		return
 	}
-	var votedForMe = 0
-	//Send a msg to all the nodes asking for elections
-	//We do it to all since the "heuristic" for deciding the next leader
-	//won't be just "highest number"
-	for i := 0; i < len(nd.nodos); i++ {
-		var reqVoteArgs = RequestVoteArgs{
-			CandidateID: nd.yo,
-			Mandate:     nd.Mandate,
-		}
-		var reqVoteReply = RequestVoteReply{}
-		if nd.enviarPeticionVoto(i, &reqVoteArgs, &reqVoteReply) {
-			if reqVoteReply.Mandate > nd.Mandate {
-				nd.updateMandate(reqVoteReply.Mandate)
-				return
-			}
-			if reqVoteReply.voteGranted &&
-				reqVoteReply.Mandate == nd.Mandate {
-				votedForMe++
-				if votedForMe > len(nd.nodos)/2 {
-					nd.isLeader = true
-				}
-				//I am the leader
-				go nd.sendHeartbeats()
-			}
-		}
-	}
+	reply.VoteGranted = false
+	reply.Term = nd.currentTerm
+	nd.mux.Unlock()
+	return
+
 }
 
 //
@@ -280,73 +378,45 @@ func (nd *Nodo) PedirVoto(args *RequestVoteArgs, reply *RequestVoteReply) {
 // that the caller passes the address of the reply struct with "&",
 // not the struct itself
 //
-// The method will not perform an RPC call to itself, skipping it if nodo
-// equals nd.yo, returning true (cause technically the node already knows that
-// a new election is needed)
 func (nd *Nodo) enviarPeticionVoto(nodo int, args *RequestVoteArgs,
 	reply *RequestVoteReply) bool {
+
 	if nd.yo == nodo {
-		reply.Mandate = nd.Mandate
-		reply.voteGranted = true
+		reply.Term = nd.currentTerm
+		reply.VoteGranted = true
 		nd.mux.Lock()
 		nd.votedFor = nd.yo
 		nd.mux.Unlock()
 		return true
 	}
+
 	ok := nd.nodos[nodo].Call("Nodo.PedirVoto", args, reply)
 
-	return ok == nil
+	return ok != nil && reply.VoteGranted
 }
 
-//SetNewLeader is an RPC call to the other peers to be performed when a node is
-//sure to be the new leader because he has >50% of the votes
-//The reply parameter is the current Mandate of the receiving node
-func (nd *Nodo) SetNewLeader(args *NewLeaderCallArgs,
-	reply *int) bool {
-	*reply = nd.Mandate
-	if nd.Mandate > args.Mandate {
-		return false
+//heartbeatListener is a function that needs to be launched as goroutine. It
+//will check if the node is receiving heartbeats from the node
+func (nd *Nodo) heartbeatListener() {
+	d, err := time.ParseDuration(nd.sleepTimeStr)
+	if err != nil {
+		os.Exit(1)
 	}
 
-	nd.mux.Lock()
-	nd.leader = args.Leader
-	nd.Mandate = args.Mandate
-	nd.mux.Unlock()
-	return true
-}
-
-func (nd *Nodo) updateMandate(Mandate int) {
-	if nd.Mandate < Mandate {
-		nd.mux.Lock()
-		nd.Mandate = Mandate
-		nd.votedFor = -1
-		nd.isLeader = false
-		nd.leader = -1
-		nd.mux.Unlock()
-	}
-}
-
-//sendHeartbeats needs to be invoked as a Goroutine and it will
-//send keep-alive messages to the followers as long as nd.isLeader is true.
-//when it detects it's turned false (for instance by *Nodo.updateMandate)
-//it will stop
-func (nd *Nodo) sendHeartbeats() {
-	var hb = HeartBeat{nd.yo, nd.Mandate}
-	for i := 0; nd.isLeader; i++ {
-		if i != nd.yo {
-			nd.nodos[i].Go("Nodo.KeepAlive", &hb, nil, nil)
+	for {
+		time.Sleep(d)
+		if !nd.isLeader {
+			nd.mux.Lock()
+			lastHB := nd.lastHeartbeat
+			lastHBLimit := nd.lastHeartbeat.Add(d)
+			nd.mux.Unlock()
+			if lastHB.Before(lastHBLimit) {
+				//necesito pedir eleciòn
+				nd.EmpezarElecion()
+			}
 		}
 	}
 }
 
-//
-//KeepAlive is the function called by the leader in the followers node to
-//signal its wellbeing.
-func (nd *Nodo) KeepAlive() {
-	var hb = HeartBeat{nd.yo, nd.Mandate}
-	for i := 0; nd.isLeader; i++ {
-		if i != nd.yo {
-			nd.nodos[i].Go("nd.KeepAlive", &hb, nil, nil)
-		}
-	}
+func (nd *Nodo) heartbeatListener() {
 }
